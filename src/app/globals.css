@@ -41,10 +41,10 @@
 :root {
   --radius: 0.7rem;
 
-  --background: oklch(0.11 0.018 245);
+  --background: oklch(0.11 0.017 245);
   --foreground: oklch(0.94 0.01 95);
 
-  --card: oklch(0.17 0.016 245);
+  --card: oklch(0.165 0.015 245);
   --card-foreground: oklch(0.94 0.01 95);
 
   --popover: oklch(0.15 0.013 245);
@@ -53,13 +53,13 @@
   --primary: oklch(0.79 0.17 72);
   --primary-foreground: oklch(0.16 0.02 252);
 
-  --secondary: oklch(0.26 0.03 224);
+  --secondary: oklch(0.26 0.028 224);
   --secondary-foreground: oklch(0.92 0.01 95);
 
   --muted: oklch(0.21 0.012 242);
   --muted-foreground: oklch(0.72 0.016 110);
 
-  --accent: oklch(0.22 0.02 212);
+  --accent: oklch(0.22 0.019 212);
   --accent-foreground: oklch(0.93 0.01 95);
 
   --destructive: oklch(0.6 0.2 28);
@@ -91,10 +91,9 @@
 
   body {
     background:
-      radial-gradient(circle at 10% -10%, oklch(0.69 0.17 73 / 0.22), transparent 32%),
-      radial-gradient(circle at 88% 4%, oklch(0.5 0.11 200 / 0.18), transparent 30%),
-      radial-gradient(circle at 50% 100%, oklch(0.35 0.08 255 / 0.22), transparent 42%),
-      var(--background);
+      radial-gradient(circle at 12% -8%, oklch(0.72 0.13 72 / 0.15), transparent 34%),
+      radial-gradient(circle at 86% 0%, oklch(0.56 0.09 210 / 0.14), transparent 30%),
+      linear-gradient(180deg, oklch(0.13 0.017 245), oklch(0.1 0.014 245) 55%, oklch(0.09 0.012 245));
     color: var(--foreground);
     @apply antialiased;
   }
@@ -102,41 +101,116 @@
 
 .panel {
   background:
-    linear-gradient(180deg, oklch(0.2 0.016 244 / 0.92), oklch(0.16 0.014 244 / 0.94)),
-    linear-gradient(135deg, oklch(0.76 0.16 72 / 0.05), transparent 45%);
+    linear-gradient(178deg, oklch(0.19 0.015 244 / 0.93), oklch(0.155 0.013 244 / 0.95)),
+    linear-gradient(130deg, oklch(0.78 0.16 72 / 0.035), transparent 45%);
   border: 1px solid color-mix(in oklch, var(--border), transparent 6%);
   border-radius: var(--radius);
   box-shadow:
-    inset 0 1px 0 oklch(0.98 0.01 95 / 0.06),
-    0 20px 38px oklch(0.03 0.01 245 / 0.32);
+    inset 0 1px 0 oklch(0.98 0.01 95 / 0.05),
+    0 18px 34px oklch(0.03 0.01 245 / 0.28);
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
+}
+
+.panel:hover {
+  border-color: color-mix(in oklch, var(--primary), var(--border) 78%);
 }
 
 .panel-soft {
   background:
-    linear-gradient(175deg, oklch(0.24 0.02 240 / 0.72), oklch(0.19 0.015 240 / 0.82)),
-    linear-gradient(130deg, oklch(0.76 0.15 70 / 0.05), transparent 52%);
+    linear-gradient(175deg, oklch(0.235 0.019 240 / 0.72), oklch(0.19 0.015 240 / 0.82)),
+    linear-gradient(130deg, oklch(0.76 0.15 70 / 0.04), transparent 52%);
   border: 1px solid color-mix(in oklch, var(--border), transparent 8%);
   border-radius: calc(var(--radius) - 0.08rem);
+  transition: border-color 170ms ease;
+}
+
+.panel-soft:hover {
+  border-color: color-mix(in oklch, var(--primary), var(--border) 85%);
 }
 
 .panel-hero {
   background:
-    radial-gradient(circle at 14% 8%, oklch(0.8 0.18 72 / 0.16), transparent 34%),
-    radial-gradient(circle at 88% 14%, oklch(0.55 0.11 215 / 0.2), transparent 38%),
-    linear-gradient(155deg, oklch(0.2 0.02 242 / 0.95), oklch(0.14 0.015 245 / 0.97));
+    radial-gradient(circle at 14% 8%, oklch(0.8 0.18 72 / 0.12), transparent 34%),
+    radial-gradient(circle at 88% 14%, oklch(0.55 0.11 215 / 0.15), transparent 38%),
+    linear-gradient(155deg, oklch(0.195 0.018 242 / 0.95), oklch(0.145 0.013 245 / 0.98));
 }
 
 .grid-fine {
   background-image:
-    linear-gradient(to right, oklch(0.98 0.01 95 / 0.06) 1px, transparent 1px),
-    linear-gradient(to bottom, oklch(0.98 0.01 95 / 0.06) 1px, transparent 1px);
-  background-size: 22px 22px;
+    linear-gradient(to right, oklch(0.98 0.01 95 / 0.045) 1px, transparent 1px),
+    linear-gradient(to bottom, oklch(0.98 0.01 95 / 0.045) 1px, transparent 1px);
+  background-size: 24px 24px;
 }
 
 @media (prefers-reduced-motion: no-preference) {
   .enter-rise {
     animation: rise 420ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
   }
+}
+
+.section-title {
+  font-size: 1.04rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.studio-shell[data-density="compact"] .section-title {
+  font-size: 0.98rem;
+}
+
+.glass-input {
+  border-color: color-mix(in oklch, var(--border), transparent 12%);
+  background:
+    linear-gradient(180deg, oklch(0.165 0.013 244 / 0.72), oklch(0.145 0.012 244 / 0.82));
+  color: var(--foreground);
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    background-color 160ms ease;
+}
+
+.glass-input:hover {
+  border-color: color-mix(in oklch, var(--primary), var(--border) 80%);
+}
+
+.glass-input:focus-visible {
+  outline: none;
+  border-color: color-mix(in oklch, var(--ring), transparent 20%);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--ring), transparent 72%);
+}
+
+.empty-state {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.9rem;
+  border-radius: calc(var(--radius) - 0.1rem);
+  border: 1px dashed color-mix(in oklch, var(--border), transparent 15%);
+  background:
+    linear-gradient(180deg, oklch(0.17 0.013 244 / 0.7), oklch(0.15 0.012 244 / 0.78));
+}
+
+.status-banner[data-tone="success"] {
+  box-shadow: 0 10px 24px oklch(0.5 0.12 145 / 0.18);
+}
+
+.status-banner[data-tone="error"] {
+  box-shadow: 0 10px 24px oklch(0.45 0.19 25 / 0.18);
+}
+
+.status-banner[data-tone="working"] {
+  box-shadow: 0 10px 24px oklch(0.55 0.11 220 / 0.16);
+}
+
+.micro-pop {
+  animation: pop-in 280ms cubic-bezier(0.16, 0.9, 0.2, 1) both;
+}
+
+.animate-spin-slow {
+  animation: spin-slow 1.3s linear infinite;
 }
 
 @keyframes rise {
@@ -147,6 +221,26 @@
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0.8;
+    transform: translateY(4px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes spin-slow {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
   }
 }
 
