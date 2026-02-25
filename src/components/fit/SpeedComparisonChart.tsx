@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { Activity } from "lucide-react";
 import { SpeedPreviewPoint } from "@/lib/fit/correction";
-import { cn, formatDuration, formatSpeed } from "@/lib/utils";
+import { cn, formatDuration, formatPace, formatSpeed } from "@/lib/utils";
 
 type SpeedComparisonChartProps = {
   points: SpeedPreviewPoint[];
@@ -324,8 +324,12 @@ export function SpeedComparisonChart({ points, minimal = false }: SpeedCompariso
             <p className="text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
               {formatDuration(activePoint.elapsedSeconds)}
             </p>
-            <p className="text-xs text-zinc-300">Original: {formatSpeed(activePoint.originalSpeedKmh)}</p>
-            <p className="text-xs text-primary">Corrected: {formatSpeed(activePoint.correctedSpeedKmh)}</p>
+            <p className="text-xs text-zinc-300">
+              Original: {formatSpeed(activePoint.originalSpeedKmh)} ({formatPace(activePoint.originalSpeedKmh)})
+            </p>
+            <p className="text-xs text-primary">
+              Corrected: {formatSpeed(activePoint.correctedSpeedKmh)} ({formatPace(activePoint.correctedSpeedKmh)})
+            </p>
           </div>
         ) : null}
       </div>

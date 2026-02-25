@@ -1,69 +1,46 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  AlertCircle,
-  CheckCircle2,
-  Circle,
-  CircleDashed,
-  Download,
-  LoaderCircle,
-  Plus,
-  Sparkles,
-  Trash2,
-  Upload,
-  WandSparkles,
-} from "lucide-react";
 import { SpeedComparisonChart } from "@/components/fit/SpeedComparisonChart";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { CorrectionSummary, correctFitActivity, SpeedPreviewPoint } from "@/lib/fit/correction";
+import { FileUploadCard } from "@/components/fit/studio/FileUploadCard";
+import { ProcessPanel } from "@/components/fit/studio/ProcessPanel";
+import { SessionSummaryPanel } from "@/components/fit/studio/SessionSummaryPanel";
+import type {
+  BuilderRow,
+  BuilderSpeedDisplay,
+  DurationMismatchWarning,
+  StatusTone,
+  StudioResult,
+  WorkflowStep,
+} from "@/components/fit/studio/types";
+import { WorkflowProgress } from "@/components/fit/studio/WorkflowProgress";
+import { WorkoutInputCard } from "@/components/fit/studio/WorkoutInputCard";
+import { correctFitActivity, inspectFitTimeline, type FitTimelineInfo } from "@/lib/fit/correction";
 import {
-  DurationUnit,
-  formatSegmentLabel,
+  type DurationUnit,
+  type WorkoutSegment,
   normalizeBuilderSegments,
   parseIntervalsNotation,
   serializeIntervalsNotation,
   totalDistanceKm,
   totalDurationSeconds,
-  WorkoutSegment,
 } from "@/lib/fit/prescription";
-import { cn, formatDuration, formatKm, formatSpeed } from "@/lib/utils";
-
-type BuilderRow = {
-  name: string;
-  duration: string;
-  unit: DurationUnit;
-  speedKmh: string;
-};
-
-type ApiSuccess = {
-  fileName: string;
-  correctedFitBytes: Uint8Array;
-  points: SpeedPreviewPoint[];
-  summary: CorrectionSummary;
-  segments: WorkoutSegment[];
-};
-
-type StepState = "idle" | "active" | "done";
-type WorkflowStep = {
-  key: string;
-  label: string;
-  state: StepState;
-};
-
-type StatusTone = "idle" | "working" | "success" | "error";
+import { cn, formatPaceInput, parsePaceInput } from "@/lib/utils";
 
 const comfortableClasses = {
   stack: "space-y-6",
   panel: "p-5 md:p-6",
-  row: "p-3",
-  rowGap: "gap-3",
 };
 
 const DEFAULT_NOTATION =
   "10m@10km/h{Step 1}, 5m@12km/h{Step 2}, 5m@9km/h{Step 3}";
+
+const createRowId = (): string => {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `row-${Math.random().toString(36).slice(2, 10)}`;
+};
 
 const formatInputNumber = (value: number): string => {
   if (!Number.isFinite(value)) return "0";
@@ -80,13 +57,19 @@ const chooseDurationUnit = (durationSeconds: number): DurationUnit => {
 const rowFromSegment = (segment: WorkoutSegment, index: number): BuilderRow => {
   const unit = chooseDurationUnit(segment.durationSeconds);
   const durationValue =
-    unit === "h" ? segment.durationSeconds / 3600 : unit === "m" ? segment.durationSeconds / 60 : segment.durationSeconds;
+    unit === "h"
+      ? segment.durationSeconds / 3600
+      : unit === "m"
+        ? segment.durationSeconds / 60
+        : segment.durationSeconds;
 
   return {
+    id: createRowId(),
     name: segment.name?.trim() || `Step ${index + 1}`,
     duration: formatInputNumber(durationValue),
     unit,
     speedKmh: formatInputNumber(segment.speedKmh),
+    pace: formatPaceInput(segment.speedKmh),
   };
 };
 
@@ -112,17 +95,32 @@ const rowsEqual = (a: BuilderRow[], b: BuilderRow[]): boolean => {
   return true;
 };
 
-const makeDefaultRow = (index: number): BuilderRow => ({
-  name: `Step ${index}`,
-  duration: "10",
-  unit: "m",
-  speedKmh: "10",
-});
+const makeDefaultRow = (index: number): BuilderRow => {
+  const speedKmh = "10";
+  return {
+    id: createRowId(),
+    name: `Step ${index}`,
+    duration: "10",
+    unit: "m",
+    speedKmh,
+    pace: formatPaceInput(Number(speedKmh)),
+  };
+};
+
+const parseNumericInput = (value: string): number => {
+  if (value.trim() === "") return Number.NaN;
+  return Number(value);
+};
 
 export function FitCorrectionStudio() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const fileReadTokenRef = useRef(0);
+
   const [file, setFile] = useState<File | null>(null);
+  const [fileTimeline, setFileTimeline] = useState<FitTimelineInfo | null>(null);
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
   const [mode, setMode] = useState<"builder" | "notation">("builder");
+  const [speedDisplay, setSpeedDisplay] = useState<BuilderSpeedDisplay>("kmh");
   const [rows, setRows] = useState<BuilderRow[]>(() => {
     try {
       return rowsFromSegments(parseIntervalsNotation(DEFAULT_NOTATION));
@@ -131,7 +129,7 @@ export function FitCorrectionStudio() {
     }
   });
   const [notation, setNotation] = useState(DEFAULT_NOTATION);
-  const [result, setResult] = useState<ApiSuccess | null>(null);
+  const [result, setResult] = useState<StudioResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
 
@@ -139,9 +137,9 @@ export function FitCorrectionStudio() {
     () =>
       rows.map((row) => ({
         name: row.name,
-        duration: Number(row.duration),
+        duration: parseNumericInput(row.duration),
         unit: row.unit,
-        speedKmh: Number(row.speedKmh),
+        speedKmh: parseNumericInput(row.speedKmh),
       })),
     [rows]
   );
@@ -190,15 +188,25 @@ export function FitCorrectionStudio() {
     setRows((current) => (rowsEqual(current, nextRows) ? current : nextRows));
   }, [mode, parsedNotation.error, parsedNotation.segments]);
 
-  const workoutDuration = totalDurationSeconds(parsed.segments);
-  const workoutDistance = totalDistanceKm(parsed.segments);
+  const workoutDurationSeconds = totalDurationSeconds(parsed.segments);
+  const workoutDistanceKm = totalDistanceKm(parsed.segments);
   const hasValidWorkout = parsed.segments.length > 0 && !parsed.error;
   const hasResult = Boolean(result);
+  const canProcess = Boolean(file) && hasValidWorkout;
+
+  const durationWarning = useMemo<DurationMismatchWarning | null>(() => {
+    if (!fileTimeline || !hasValidWorkout) return null;
+    const delta = Math.abs(fileTimeline.durationSeconds - workoutDurationSeconds);
+    if (delta < 5) return null;
+    return {
+      fitDurationSeconds: fileTimeline.durationSeconds,
+      workoutDurationSeconds,
+      deltaSeconds: delta,
+    };
+  }, [fileTimeline, hasValidWorkout, workoutDurationSeconds]);
 
   const workflowSteps = useMemo<WorkflowStep[]>(() => {
     const hasFile = Boolean(file);
-    const canProcess = hasFile && hasValidWorkout;
-
     return [
       {
         key: "upload",
@@ -221,7 +229,7 @@ export function FitCorrectionStudio() {
         state: hasResult ? "done" : "idle",
       },
     ];
-  }, [file, hasResult, hasValidWorkout, isProcessing]);
+  }, [file, hasResult, hasValidWorkout, canProcess, isProcessing]);
 
   const status = useMemo(
     (): { tone: StatusTone; title: string; message: string } => {
@@ -276,6 +284,67 @@ export function FitCorrectionStudio() {
 
   const addRow = () => {
     setRows((current) => [...current, makeDefaultRow(current.length + 1)]);
+  };
+
+  const setRowSpeed = (index: number, value: string) => {
+    if (speedDisplay === "kmh") {
+      const speed = Number(value);
+      updateRow(index, {
+        speedKmh: value,
+        pace: Number.isFinite(speed) && speed > 0 ? formatPaceInput(speed) : "",
+      });
+      return;
+    }
+
+    const parsedPace = parsePaceInput(value);
+    updateRow(index, {
+      pace: value,
+      speedKmh: parsedPace === null ? "" : formatInputNumber(parsedPace),
+    });
+  };
+
+  const setSpeedDisplayMode = (nextMode: BuilderSpeedDisplay) => {
+    setSpeedDisplay(nextMode);
+    if (nextMode === "pace") {
+      setRows((current) =>
+        current.map((row) => ({
+          ...row,
+          pace: Number.isFinite(Number(row.speedKmh)) ? formatPaceInput(Number(row.speedKmh)) : row.pace,
+        }))
+      );
+    }
+  };
+
+  const handleModeChange = (nextMode: "builder" | "notation") => {
+    if (nextMode === "builder" && parsedNotation.error) return;
+    if (nextMode === "notation" && parsedBuilder.error) return;
+    setMode(nextMode);
+  };
+
+  const handleFileSelected = async (selected: File | null) => {
+    const token = fileReadTokenRef.current + 1;
+    fileReadTokenRef.current = token;
+
+    setFile(selected);
+    setFileTimeline(null);
+    setResult(null);
+    setError(null);
+
+    if (!selected) return;
+
+    try {
+      const bytes = new Uint8Array(await selected.arrayBuffer());
+      const timeline = inspectFitTimeline(bytes);
+      if (token !== fileReadTokenRef.current) return;
+      setFileTimeline(timeline);
+    } catch (inspectionError) {
+      if (token !== fileReadTokenRef.current) return;
+      setError(
+        inspectionError instanceof Error
+          ? inspectionError.message
+          : "Unexpected failure while reading FIT timeline."
+      );
+    }
   };
 
   const processFit = async () => {
@@ -353,348 +422,49 @@ export function FitCorrectionStudio() {
 
       <div className="grid gap-6 xl:grid-cols-[1.18fr_0.82fr]">
         <section className={comfortableClasses.stack}>
-          <div className={cn("panel", comfortableClasses.panel)}>
-            <h2 className="section-title">1. FIT File Upload</h2>
-            <p className="mb-3 text-sm text-muted-foreground">
-              Use your original treadmill activity file as the source for correction.
-            </p>
+          <FileUploadCard
+            file={file}
+            fileInputRef={fileInputRef}
+            isDragging={isDraggingFile}
+            onFileSelected={handleFileSelected}
+            onDragStateChange={setIsDraggingFile}
+          />
 
-            <label
-              className={cn(
-                "panel-soft flex cursor-pointer flex-col border border-dashed border-border/75 transition-colors hover:border-primary/45",
-                comfortableClasses.row,
-                comfortableClasses.rowGap
-              )}
-            >
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".fit"
-                className="sr-only"
-                onChange={(event) => {
-                  const selected = event.target.files?.[0] ?? null;
-                  setFile(selected);
-                  setResult(null);
-                  setError(null);
-                }}
-              />
+          <WorkoutInputCard
+            mode={mode}
+            onModeChange={handleModeChange}
+            speedDisplay={speedDisplay}
+            onSpeedDisplayChange={setSpeedDisplayMode}
+            rows={rows}
+            onRowNameChange={(index, value) => updateRow(index, { name: value })}
+            onRowDurationChange={(index, value) => updateRow(index, { duration: value })}
+            onRowDurationUnitChange={(index, value) => updateRow(index, { unit: value })}
+            onRowSpeedChange={setRowSpeed}
+            onRemoveRow={removeRow}
+            onAddRow={addRow}
+            notation={notation}
+            onNotationChange={setNotation}
+            segments={parsed.segments}
+            parsedError={parsed.error}
+            workoutDurationSeconds={workoutDurationSeconds}
+            workoutDistanceKm={workoutDistanceKm}
+            durationWarning={durationWarning}
+          />
 
-              <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
-                <Upload className="h-4 w-4" /> Choose a .fit file
-              </span>
-
-              <div className="flex flex-wrap items-center gap-3">
-                <Button type="button" variant="secondary" onClick={() => fileInputRef.current?.click()}>
-                  Select File
-                </Button>
-                <span className="text-sm text-muted-foreground">
-                  {file ? file.name : "No file selected"}
-                </span>
-              </div>
-
-              <span className="text-xs text-muted-foreground">
-                {file ? `${(file.size / 1024).toFixed(1)} KB` : "Accepted format: .fit"}
-              </span>
-            </label>
-          </div>
-
-          <div className={cn("panel", comfortableClasses.panel)} id="parser">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-              <h2 className="section-title">2. Real Workout Input</h2>
-              <div className="flex gap-2">
-                <Button
-                  variant={mode === "builder" ? "default" : "secondary"}
-                  size="sm"
-                  onClick={() => {
-                    if (mode === "notation" && parsedNotation.error) return;
-                    setMode("builder");
-                  }}
-                >
-                  Visual Builder
-                </Button>
-                <Button
-                  variant={mode === "notation" ? "default" : "secondary"}
-                  size="sm"
-                  onClick={() => {
-                    if (mode === "builder" && parsedBuilder.error) return;
-                    setMode("notation");
-                  }}
-                >
-                  Text Notation
-                </Button>
-              </div>
-            </div>
-
-            {mode === "builder" ? (
-              <div className="space-y-3">
-                {rows.map((row, index) => (
-                  <div
-                    key={`row-${index}`}
-                    className={cn(
-                      "panel-soft flex flex-wrap items-end",
-                      comfortableClasses.row,
-                      comfortableClasses.rowGap
-                    )}
-                  >
-                    <div className="min-w-[110px] shrink-0 rounded-md bg-black/20 px-2 py-1 text-xs text-muted-foreground">
-                      Step {index + 1}
-                    </div>
-
-                    <div className="min-w-[160px] flex-1">
-                      <label className="mb-1 block text-xs text-muted-foreground">Name</label>
-                      <Input
-                        type="text"
-                        value={row.name}
-                        placeholder={`Step ${index + 1}`}
-                        onChange={(event) => updateRow(index, { name: event.target.value })}
-                      />
-                    </div>
-
-                    <div className="min-w-[120px] flex-1">
-                      <label className="mb-1 block text-xs text-muted-foreground">Duration</label>
-                      <Input
-                        type="number"
-                        step="0.1"
-                        value={row.duration}
-                        onChange={(event) => updateRow(index, { duration: event.target.value })}
-                      />
-                    </div>
-
-                    <div className="w-[120px]">
-                      <label className="mb-1 block text-xs text-muted-foreground">Unit</label>
-                      <select
-                        className="glass-input flex h-9 w-full rounded-md border px-2 text-sm"
-                        value={row.unit}
-                        onChange={(event) =>
-                          updateRow(index, {
-                            unit: event.target.value as DurationUnit,
-                          })
-                        }
-                      >
-                        <option value="s">seconds</option>
-                        <option value="m">minutes</option>
-                        <option value="h">hours</option>
-                      </select>
-                    </div>
-
-                    <div className="min-w-[140px] flex-1">
-                      <label className="mb-1 block text-xs text-muted-foreground">Speed (km/h)</label>
-                      <Input
-                        type="number"
-                        step="0.1"
-                        value={row.speedKmh}
-                        onChange={(event) => updateRow(index, { speedKmh: event.target.value })}
-                      />
-                    </div>
-
-                    <Button variant="ghost" size="icon" onClick={() => removeRow(index)} title="Remove step">
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                ))}
-
-                <Button variant="outline" size="sm" onClick={addRow}>
-                  <Plus className="mr-1 h-4 w-4" /> Add step
-                </Button>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <textarea
-                  value={notation}
-                  onChange={(event) => setNotation(event.target.value)}
-                  className="glass-input min-h-[150px] w-full resize-y rounded-md border px-3 py-2 font-mono text-sm"
-                  placeholder="Example: 3x(2m@14km/h{Fast},1m@8km/h{Recovery}), 10m@10km/h{Warm Up}"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Supported: 10m@10km/h, 45s@5m/s, 3x(2m@14,1m@8), and optional names: 45s@16.3km/h{"{Step 43}"}
-                </p>
-              </div>
-            )}
-
-            <div className={cn("panel-soft mt-4 text-sm", comfortableClasses.row)}>
-              <div className="mb-2 flex flex-wrap items-center gap-2">
-                <Badge variant="outline">steps: {parsed.segments.length}</Badge>
-                <Badge variant="outline">duration: {formatDuration(workoutDuration)}</Badge>
-                <Badge variant="outline">planned distance: {formatKm(workoutDistance)}</Badge>
-              </div>
-
-              {parsed.error ? (
-                <p className="text-sm text-red-300">{parsed.error}</p>
-              ) : (
-                <p className="text-xs text-muted-foreground">
-                  {parsed.segments.slice(0, 4).map(formatSegmentLabel).join(" | ")}
-                  {parsed.segments.length > 4 ? " ..." : ""}
-                </p>
-              )}
-            </div>
-          </div>
-
-          <div className={cn("panel", comfortableClasses.panel)} id="pipeline">
-            <h2 className="section-title">3. Process and Export</h2>
-
-            <div className="space-y-2 text-sm text-muted-foreground">
-              <p>
-                The backend rewrites <code>speed</code>/<code>enhancedSpeed</code> and <code>distance</code> for every
-                record, then recalculates lap, session, and activity totals.
-              </p>
-              <p>Heart rate, cadence, and the remaining metrics are preserved from the original file.</p>
-            </div>
-
-            <div className="mt-4 flex flex-wrap items-center gap-3">
-              <Button onClick={processFit} disabled={isProcessing || !file || Boolean(parsed.error)}>
-                {isProcessing ? (
-                  <>
-                    <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> Processing...
-                  </>
-                ) : (
-                  <>
-                    <WandSparkles className="mr-2 h-4 w-4" /> Generate corrected file
-                  </>
-                )}
-              </Button>
-
-              {result ? (
-                <Button variant="secondary" onClick={downloadCorrectedFile} className="micro-pop">
-                  <Download className="mr-2 h-4 w-4" /> Download corrected FIT
-                </Button>
-              ) : null}
-            </div>
-
-            <StatusBanner tone={status.tone} title={status.title} message={status.message} />
-          </div>
+          <ProcessPanel
+            isProcessing={isProcessing}
+            canProcess={canProcess}
+            hasResult={hasResult}
+            onProcess={processFit}
+            onDownload={downloadCorrectedFile}
+            status={status}
+          />
         </section>
 
         <section className={comfortableClasses.stack} id="preview">
-          <div className={cn("panel", comfortableClasses.panel)}>
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-              <h2 className="section-title">Session Summary</h2>
-              {result ? (
-                <Badge variant="outline" className="font-mono text-[11px]">
-                  {result.fileName}
-                </Badge>
-              ) : null}
-            </div>
-
-            {result ? (
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Metric label="Duration" value={formatDuration(result.summary.durationSeconds)} />
-                <Metric label="Records" value={String(result.summary.recordsCount)} />
-                <Metric label="Original Distance" value={formatKm(result.summary.originalDistanceKm)} />
-                <Metric label="Corrected Distance" value={formatKm(result.summary.correctedDistanceKm)} />
-                <Metric label="Original Avg Speed" value={formatSpeed(result.summary.originalAvgSpeedKmh)} />
-                <Metric label="Corrected Avg Speed" value={formatSpeed(result.summary.correctedAvgSpeedKmh)} />
-                <Metric label="Original Peak Speed" value={formatSpeed(result.summary.maxOriginalSpeedKmh)} />
-                <Metric label="Corrected Peak Speed" value={formatSpeed(result.summary.maxCorrectedSpeedKmh)} />
-              </div>
-            ) : (
-              <div className="empty-state">
-                <WandSparkles className="h-5 w-5 text-primary" />
-                <div>
-                  <p className="font-medium text-foreground">No correction preview yet</p>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    Run the processing step to generate metrics and verify the rewritten activity.
-                  </p>
-                </div>
-              </div>
-            )}
-          </div>
-
+          <SessionSummaryPanel result={result} />
           <SpeedComparisonChart points={result?.points ?? []} />
         </section>
-      </div>
-    </div>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="panel-soft p-3">
-      <p className="text-xs uppercase tracking-[0.08em] text-muted-foreground">{label}</p>
-      <p className="mt-1 text-lg font-semibold text-foreground">{value}</p>
-    </div>
-  );
-}
-
-function WorkflowProgress({ steps }: { steps: WorkflowStep[] }) {
-  return (
-    <ol className="mt-5 flex flex-wrap items-center gap-y-2" aria-label="Workflow progress">
-      {steps.map((step, index) => (
-        <li key={step.key} className="flex items-center">
-          <span
-            className={cn(
-              "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-medium uppercase tracking-[0.1em] transition-colors",
-              step.state === "done" && "border-primary/70 bg-primary/10 text-primary",
-              step.state === "active" && "border-sky-300/45 bg-sky-400/10 text-sky-100",
-              step.state === "idle" && "border-border/80 bg-card/60 text-muted-foreground"
-            )}
-          >
-            {step.state === "done" ? (
-              <CheckCircle2 className="h-3.5 w-3.5" />
-            ) : step.state === "active" ? (
-              <CircleDashed className="h-3.5 w-3.5 animate-spin-slow" />
-            ) : (
-              <Circle className="h-3.5 w-3.5" />
-            )}
-            {step.label}
-          </span>
-
-          {index < steps.length - 1 ? (
-            <span
-              className={cn(
-                "mx-2 h-px w-7",
-                step.state === "done" ? "bg-primary/60" : "bg-border/80"
-              )}
-            />
-          ) : null}
-        </li>
-      ))}
-    </ol>
-  );
-}
-
-function StatusBanner({
-  tone,
-  title,
-  message,
-}: {
-  tone: StatusTone;
-  title: string;
-  message: string;
-}) {
-  return (
-    <div
-      className={cn(
-        "status-banner mt-4 flex items-start gap-3 rounded-lg border px-3 py-2.5",
-        tone === "idle" && "border-border/80 bg-card/55",
-        tone === "working" && "border-sky-300/35 bg-sky-400/10",
-        tone === "success" && "border-emerald-300/35 bg-emerald-400/10 micro-pop",
-        tone === "error" && "border-red-300/40 bg-red-400/10"
-      )}
-      data-tone={tone}
-    >
-      <div
-        className={cn(
-          "mt-0.5 flex h-6 w-6 items-center justify-center rounded-full border",
-          tone === "idle" && "border-border/90 bg-card/70 text-muted-foreground",
-          tone === "working" && "border-sky-300/40 bg-sky-400/15 text-sky-100",
-          tone === "success" && "border-emerald-300/45 bg-emerald-400/20 text-emerald-100",
-          tone === "error" && "border-red-300/45 bg-red-400/20 text-red-100"
-        )}
-      >
-        {tone === "working" ? (
-          <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-        ) : tone === "success" ? (
-          <CheckCircle2 className="h-3.5 w-3.5" />
-        ) : tone === "error" ? (
-          <AlertCircle className="h-3.5 w-3.5" />
-        ) : (
-          <Sparkles className="h-3.5 w-3.5" />
-        )}
-      </div>
-
-      <div>
-        <p className="text-sm font-medium text-foreground">{title}</p>
-        <p className="text-xs text-muted-foreground">{message}</p>
       </div>
     </div>
   );

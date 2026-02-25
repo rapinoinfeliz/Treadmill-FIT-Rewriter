@@ -43,6 +43,23 @@ const SPEED_UNIT_ALIASES: Record<string, "kmh" | "mps" | "mph"> = {
   "mi/h": "mph",
 };
 
+const DISTANCE_UNIT_ALIASES: Record<string, "km" | "mi"> = {
+  km: "km",
+  kms: "km",
+  mi: "mi",
+  mile: "mi",
+  miles: "mi",
+};
+
+const PACE_UNIT_ALIASES: Record<string, "perKm"> = {
+  "/km": "perKm",
+  km: "perKm",
+  "min/km": "perKm",
+  "mins/km": "perKm",
+  "minute/km": "perKm",
+  "minutes/km": "perKm",
+};
+
 const convertDurationToSeconds = (duration: number, unit: DurationUnit): number => {
   if (unit === "s") return duration;
   if (unit === "m") return duration * 60;
@@ -182,13 +199,7 @@ class NotationParser {
       return expanded;
     }
 
-    const durationUnitToken = this.readWord();
-    const durationUnit = DURATION_ALIASES[durationUnitToken.toLowerCase()];
-    if (!durationUnit) {
-      throw this.error(
-        `Invalid duration unit '${durationUnitToken || ""}'. Use s, m or h.`
-      );
-    }
+    const stepLength = this.parseStepLength(firstNumber);
 
     this.skipWhitespace();
     const delimiter = this.peek();
@@ -197,25 +208,54 @@ class NotationParser {
     }
 
     this.skipWhitespace();
-    const speedValue = this.parseNumber("Expected speed after duration");
+    const firstSpeedValue = this.parseNumber("Expected speed or pace after duration");
+    let speedKmh = firstSpeedValue;
 
     this.skipWhitespace();
-    const maybeUnit = this.peek();
-    let speedUnit: "kmh" | "mps" | "mph" = "kmh";
-
-    if (maybeUnit !== null && /[A-Za-z/]/.test(maybeUnit)) {
-      const speedUnitToken = this.readWord().toLowerCase();
-      const parsedSpeedUnit = SPEED_UNIT_ALIASES[speedUnitToken];
-      if (!parsedSpeedUnit) {
-        throw this.error(
-          `Invalid speed unit '${speedUnitToken}'. Use km/h, m/s, or mph.`
-        );
+    if (this.peek() === ":") {
+      this.index += 1;
+      const paceSecondsPart = this.parseNumber("Expected pace seconds after ':'");
+      if (paceSecondsPart < 0 || paceSecondsPart >= 60) {
+        throw this.error("Pace seconds must be in the 0-59 range");
       }
-      speedUnit = parsedSpeedUnit;
-    }
 
-    const durationSeconds = convertDurationToSeconds(firstNumber, durationUnit);
-    const speedKmh = convertSpeedToKmh(speedValue, speedUnit);
+      this.skipWhitespace();
+      const maybePaceUnit = this.peek();
+      if (maybePaceUnit !== null && /[A-Za-z/]/.test(maybePaceUnit)) {
+        const paceUnitToken = this.readWord().toLowerCase();
+        const parsedPaceUnit = PACE_UNIT_ALIASES[paceUnitToken];
+        if (!parsedPaceUnit) {
+          throw this.error(
+            `Invalid pace unit '${paceUnitToken}'. Use '/km' or 'min/km'.`
+          );
+        }
+      }
+
+      const paceSecondsPerKm = firstSpeedValue * 60 + paceSecondsPart;
+      if (paceSecondsPerKm <= 0) {
+        throw this.error("Pace must be positive");
+      }
+      speedKmh = 3600 / paceSecondsPerKm;
+    } else {
+      const maybeUnit = this.peek();
+      let speedUnit: "kmh" | "mps" | "mph" = "kmh";
+
+      if (maybeUnit !== null && /[A-Za-z/]/.test(maybeUnit)) {
+        const speedUnitToken = this.readWord().toLowerCase();
+        const parsedSpeedUnit = SPEED_UNIT_ALIASES[speedUnitToken];
+        if (!parsedSpeedUnit) {
+          throw this.error(
+            `Invalid speed unit '${speedUnitToken}'. Use km/h, m/s, or mph.`
+          );
+        }
+        speedUnit = parsedSpeedUnit;
+      }
+      speedKmh = convertSpeedToKmh(firstSpeedValue, speedUnit);
+    }
+    const durationSeconds =
+      stepLength.type === "time"
+        ? stepLength.durationSeconds
+        : this.distanceStepToDurationSeconds(stepLength.distanceKm, speedKmh);
     const name = this.parseOptionalName();
 
     return [
@@ -228,6 +268,98 @@ class NotationParser {
         "Notation"
       ),
     ];
+  }
+
+  private parseStepLength(firstNumber: number):
+    | { type: "time"; durationSeconds: number }
+    | { type: "distance"; distanceKm: number } {
+    this.skipWhitespace();
+    const marker = this.peek();
+
+    if (marker === "'") {
+      this.index += 1;
+      let durationSeconds = firstNumber * 60;
+
+      this.skipWhitespace();
+      const next = this.peek();
+      if (next !== null && /[0-9]/.test(next)) {
+        const extraSeconds = this.parseNumber("Expected seconds after minute shorthand");
+        durationSeconds += extraSeconds;
+        this.skipWhitespace();
+        if (this.peek() === "\"") {
+          this.index += 1;
+        }
+      }
+
+      return { type: "time", durationSeconds };
+    }
+
+    if (marker === "\"") {
+      this.index += 1;
+      return { type: "time", durationSeconds: firstNumber };
+    }
+
+    const token = this.readWord().toLowerCase();
+    const durationUnit = DURATION_ALIASES[token];
+    if (durationUnit) {
+      const baseDuration = convertDurationToSeconds(firstNumber, durationUnit);
+      const extraDuration = this.parseCombinedTimeTail(durationUnit);
+      return { type: "time", durationSeconds: baseDuration + extraDuration };
+    }
+
+    const distanceUnit = DISTANCE_UNIT_ALIASES[token];
+    if (distanceUnit) {
+      const distanceKm = distanceUnit === "km" ? firstNumber : firstNumber * 1.609344;
+      return { type: "distance", distanceKm };
+    }
+
+    throw this.error(
+      `Invalid duration/distance unit '${token || ""}'. Use h/m/s, '/, ", km or mi.`
+    );
+  }
+
+  private parseCombinedTimeTail(baseUnit: DurationUnit): number {
+    this.skipWhitespace();
+    const next = this.peek();
+    if (next === null || !/[0-9]/.test(next)) {
+      return 0;
+    }
+
+    const trailingValue = this.parseNumber("Expected combined time value");
+    this.skipWhitespace();
+
+    const marker = this.peek();
+    if (marker === "\"") {
+      this.index += 1;
+      return trailingValue;
+    }
+
+    if (marker === "'") {
+      this.index += 1;
+      return trailingValue * 60;
+    }
+
+    const explicitUnitToken = this.readWord().toLowerCase();
+    if (explicitUnitToken) {
+      const explicitUnit = DURATION_ALIASES[explicitUnitToken];
+      if (!explicitUnit) {
+        throw this.error(
+          `Invalid combined time unit '${explicitUnitToken}'. Use h, m or s.`
+        );
+      }
+      return convertDurationToSeconds(trailingValue, explicitUnit);
+    }
+
+    if (baseUnit === "h") return trailingValue * 60;
+    if (baseUnit === "m") return trailingValue;
+    return trailingValue;
+  }
+
+  private distanceStepToDurationSeconds(distanceKm: number, speedKmh: number): number {
+    if (speedKmh <= 0) {
+      throw this.error("Distance-based steps require speed above 0 km/h.");
+    }
+    return (distanceKm / speedKmh) * 3600;
   }
 
   private parseOptionalName(): string | undefined {

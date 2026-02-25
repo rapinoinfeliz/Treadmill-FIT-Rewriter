@@ -47,6 +47,11 @@ export type FitCorrectionResult = {
   summary: CorrectionSummary;
 };
 
+export type FitTimelineInfo = {
+  durationSeconds: number;
+  recordsCount: number;
+};
+
 const FIT_EPOCH_MS =
   typeof Utils?.FIT_EPOCH_MS === "number" ? Number(Utils.FIT_EPOCH_MS) : 631065600000;
 
@@ -799,13 +804,18 @@ const encodeMessages = (
   messages: OrderedMessage[],
   fieldDescriptions: Record<string, { developerDataIdMesg: unknown; fieldDescriptionMesg: unknown }>
 ): Uint8Array => {
-  const encoder = new Encoder({ fieldDescriptions });
+  try {
+    const encoder = new Encoder({ fieldDescriptions });
 
-  for (const message of messages) {
-    encoder.onMesg(message.mesgNum, message.message);
+    for (const message of messages) {
+      encoder.onMesg(message.mesgNum, message.message);
+    }
+
+    return encoder.close();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to encode corrected FIT file: ${detail}`);
   }
-
-  return encoder.close();
 };
 
 const fitDistanceFromSeries = (records: RecordState[]): number | null => {
@@ -877,5 +887,35 @@ export const correctFitActivity = (
     correctedFitBytes,
     points: buildPreviewPoints(records),
     summary,
+  };
+};
+
+export const inspectFitTimeline = (fitBytes: Uint8Array): FitTimelineInfo => {
+  const decoded = decodeMessages(fitBytes);
+  let firstTimestampMs: number | null = null;
+  let lastTimestampMs: number | null = null;
+  let recordsCount = 0;
+
+  for (const entry of decoded.messages) {
+    if (entry.mesgNum !== MESG_NUM.record) continue;
+    const timestampMs = getTimestampMs(entry.message);
+    if (timestampMs === null) continue;
+
+    recordsCount += 1;
+    if (firstTimestampMs === null || timestampMs < firstTimestampMs) {
+      firstTimestampMs = timestampMs;
+    }
+    if (lastTimestampMs === null || timestampMs > lastTimestampMs) {
+      lastTimestampMs = timestampMs;
+    }
+  }
+
+  if (recordsCount < 2 || firstTimestampMs === null || lastTimestampMs === null) {
+    throw new Error("Could not extract a valid timeline from FIT record messages.");
+  }
+
+  return {
+    durationSeconds: Math.max((lastTimestampMs - firstTimestampMs) / 1000, 0),
+    recordsCount,
   };
 };

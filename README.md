@@ -10,6 +10,7 @@ The project is designed for users who run on treadmills but get inaccurate pace/
 - Parse workout prescription from:
   - visual step builder, or
   - text notation (Intervals-style).
+- Support both speed (`km/h`, `m/s`, `mph`) and pace (`min/km`) notation.
 - Rewrite record-level speed and distance series.
 - Recalculate lap/session/activity totals.
 - Inject workout metadata and workout linkage messages.
@@ -86,7 +87,7 @@ npm run build
 1. Upload a `.fit` activity file.
 2. Define the real workout using:
    - visual builder, or
-   - text notation such as `3x(2m@14km/h,1m@8km/h)`.
+   - text notation such as `3x(2m@14km/h,1m@8km/h)` or `6x(45s@3:40/km,15s@0.1km/h)`.
 3. Process the file.
 4. Review summary metrics and the speed comparison chart.
 5. Download the corrected `.fit`.
@@ -102,11 +103,15 @@ src/
     page.tsx                     # home page
   components/
     fit/
-      FitCorrectionStudio.tsx    # main UI flow
+      FitCorrectionStudio.tsx    # studio orchestration and state
       SpeedComparisonChart.tsx   # original vs corrected chart
-    layout/
-      Header.tsx
-      Sidebar.tsx
+      studio/
+        FileUploadCard.tsx
+        WorkoutInputCard.tsx
+        ProcessPanel.tsx
+        SessionSummaryPanel.tsx
+        WorkflowProgress.tsx
+        StatusBanner.tsx
     ui/
       button.tsx
       input.tsx
