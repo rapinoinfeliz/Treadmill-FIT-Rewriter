@@ -18,7 +18,7 @@ The project is designed for users who run on treadmills but get inaccurate pace/
 
 ## How It Works
 
-1. The API decodes the uploaded FIT using `@garmin/fitsdk` while preserving message schemas.
+1. The app decodes the uploaded FIT in the browser using `@garmin/fitsdk` while preserving message schemas.
 2. Record messages are grouped by timestamp and converted into a processing timeline.
 3. Corrected speed is calculated from the user-defined workout prescription.
 4. Corrected cumulative distance is re-integrated across the full record stream.
@@ -31,7 +31,7 @@ The project is designed for users who run on treadmills but get inaccurate pace/
    - `workout`
    - `workout_step`
    - lap segmentation with `wktStepIndex` mapping
-7. The FIT is re-encoded and returned to the client as a downloadable file.
+7. The FIT is re-encoded and downloaded directly in the browser.
 
 ## Workout Association Strategy
 
@@ -92,31 +92,11 @@ npm run build
 5. Download the corrected `.fit`.
 6. Upload the corrected file to your target platform.
 
-## API
-
-### `POST /api/fit/correct`
-
-`multipart/form-data` fields:
-
-- `fitFile` (File, required)
-- `mode` (`builder` | `notation`)
-- `notation` (string)
-- `builderSegments` (JSON string)
-
-Response:
-
-- `fileName`
-- `correctedFitBase64`
-- `points` (chart preview points)
-- `summary` (distance/speed/timing metrics)
-- `segments` (normalized workout segments)
-
 ## Project Structure
 
 ```text
 src/
   app/
-    api/fit/correct/route.ts     # FIT correction endpoint
     globals.css                  # theme and global styling
     layout.tsx                   # root app layout
     page.tsx                     # home page
@@ -146,9 +126,23 @@ src/
 
 ## Data Handling
 
-- Processing is request-based and in-memory on the server runtime.
+- Processing is local to the browser and in-memory.
 - No persistence layer is included by default.
 - No external telemetry pipeline is required for core processing.
+
+## GitHub Pages Deployment
+
+This project is configured for static export (`output: "export"`) and deploys automatically to GitHub Pages through GitHub Actions.
+
+1. Push to `main`.
+2. In GitHub repository settings:
+   - go to `Settings > Pages`;
+   - set `Source` to `GitHub Actions`.
+3. Wait for workflow `Deploy To GitHub Pages` to complete.
+
+Default URL format:
+
+- `https://<your-user>.github.io/<your-repo>/`
 
 ## License
 

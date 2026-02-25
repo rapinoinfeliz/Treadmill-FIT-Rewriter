@@ -18,7 +18,7 @@ import { SpeedComparisonChart } from "@/components/fit/SpeedComparisonChart";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { CorrectionSummary, SpeedPreviewPoint } from "@/lib/fit/correction";
+import { CorrectionSummary, correctFitActivity, SpeedPreviewPoint } from "@/lib/fit/correction";
 import {
   DurationUnit,
   formatSegmentLabel,
@@ -40,7 +40,7 @@ type BuilderRow = {
 
 type ApiSuccess = {
   fileName: string;
-  correctedFitBase64: string;
+  correctedFitBytes: Uint8Array;
   points: SpeedPreviewPoint[];
   summary: CorrectionSummary;
   segments: WorkoutSegment[];
@@ -295,24 +295,19 @@ export function FitCorrectionStudio() {
     setResult(null);
 
     try {
-      const formData = new FormData();
-      formData.append("fitFile", file);
-      formData.append("mode", mode);
-      formData.append("notation", notation);
-      formData.append("builderSegments", JSON.stringify(builderPayload));
+      const inputBytes = new Uint8Array(await file.arrayBuffer());
+      const corrected = correctFitActivity(inputBytes, parsed.segments);
 
-      const response = await fetch("/api/fit/correct", {
-        method: "POST",
-        body: formData,
+      const trimmed = file.name.trim() || "activity.fit";
+      const base = trimmed.replace(/\.fit$/i, "");
+
+      setResult({
+        fileName: `${base}-corrected.fit`,
+        correctedFitBytes: corrected.correctedFitBytes,
+        points: corrected.points,
+        summary: corrected.summary,
+        segments: parsed.segments,
       });
-
-      const payload = (await response.json()) as ApiSuccess | { error?: string };
-
-      if (!response.ok) {
-        throw new Error((payload as { error?: string }).error ?? "Failed to process FIT file.");
-      }
-
-      setResult(payload as ApiSuccess);
     } catch (requestError) {
       setResult(null);
       setError(
@@ -326,14 +321,8 @@ export function FitCorrectionStudio() {
   const downloadCorrectedFile = () => {
     if (!result) return;
 
-    const binary = atob(result.correctedFitBase64);
-    const bytes = new Uint8Array(binary.length);
-
-    for (let i = 0; i < binary.length; i += 1) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-
-    const blob = new Blob([bytes], { type: "application/octet-stream" });
+    const safeBytes = Uint8Array.from(result.correctedFitBytes);
+    const blob = new Blob([safeBytes], { type: "application/octet-stream" });
     const url = URL.createObjectURL(blob);
 
     const anchor = document.createElement("a");

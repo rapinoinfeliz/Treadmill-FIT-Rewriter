@@ -326,7 +326,22 @@ const decodeMessages = (fitBytes: Uint8Array): {
   messages: OrderedMessage[];
   fieldDescriptions: Record<string, { developerDataIdMesg: unknown; fieldDescriptionMesg: unknown }>;
 } => {
-  const stream = Stream.fromBuffer(Buffer.from(fitBytes));
+  type StreamFactory = {
+    fromByteArray?: (input: number[]) => ReturnType<typeof Stream.fromBuffer>;
+    fromArrayBuffer?: (input: ArrayBuffer) => ReturnType<typeof Stream.fromBuffer>;
+  };
+  const streamFactory = Stream as unknown as StreamFactory;
+  const fitBytesSafe = Uint8Array.from(fitBytes);
+  const fitArrayBuffer = fitBytesSafe.buffer;
+
+  const stream =
+    (streamFactory.fromByteArray?.(Array.from(fitBytesSafe)) ??
+      streamFactory.fromArrayBuffer?.(fitArrayBuffer)) ??
+    null;
+
+  if (!stream) {
+    throw new Error("Could not initialize FIT stream decoder.");
+  }
 
   if (!Decoder.isFIT(stream)) {
     throw new Error("Invalid file: this does not look like a .fit activity.");
