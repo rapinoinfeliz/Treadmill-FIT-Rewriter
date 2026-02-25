@@ -17,6 +17,11 @@ const mono = IBM_Plex_Mono({
 export const metadata: Metadata = {
   title: "Treadmill Corrector",
   description: "Rewrite treadmill speed and distance in .fit activity files.",
+  icons: {
+    icon: "/icon.svg",
+    shortcut: "/icon.svg",
+    apple: "/apple-icon.svg",
+  },
 };
 
 export default function RootLayout({
