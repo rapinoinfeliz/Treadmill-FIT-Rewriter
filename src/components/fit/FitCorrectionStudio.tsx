@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   CheckCircle2,
@@ -24,6 +24,7 @@ import {
   formatSegmentLabel,
   normalizeBuilderSegments,
   parseIntervalsNotation,
+  serializeIntervalsNotation,
   totalDistanceKm,
   totalDurationSeconds,
   WorkoutSegment,
@@ -31,6 +32,7 @@ import {
 import { cn, formatDuration, formatKm, formatSpeed } from "@/lib/utils";
 
 type BuilderRow = {
+  name: string;
   duration: string;
   unit: DurationUnit;
   speedKmh: string;
@@ -60,7 +62,58 @@ const comfortableClasses = {
   rowGap: "gap-3",
 };
 
-const makeDefaultRow = (): BuilderRow => ({
+const DEFAULT_NOTATION =
+  "10m@10km/h{Step 1}, 5m@12km/h{Step 2}, 5m@9km/h{Step 3}";
+
+const formatInputNumber = (value: number): string => {
+  if (!Number.isFinite(value)) return "0";
+  return value.toFixed(3).replace(/\.?0+$/, "");
+};
+
+const chooseDurationUnit = (durationSeconds: number): DurationUnit => {
+  const EPSILON = 1e-9;
+  if (Math.abs(durationSeconds % 3600) <= EPSILON) return "h";
+  if (Math.abs(durationSeconds % 60) <= EPSILON) return "m";
+  return "s";
+};
+
+const rowFromSegment = (segment: WorkoutSegment, index: number): BuilderRow => {
+  const unit = chooseDurationUnit(segment.durationSeconds);
+  const durationValue =
+    unit === "h" ? segment.durationSeconds / 3600 : unit === "m" ? segment.durationSeconds / 60 : segment.durationSeconds;
+
+  return {
+    name: segment.name?.trim() || `Step ${index + 1}`,
+    duration: formatInputNumber(durationValue),
+    unit,
+    speedKmh: formatInputNumber(segment.speedKmh),
+  };
+};
+
+const rowsFromSegments = (segments: WorkoutSegment[]): BuilderRow[] => {
+  if (segments.length === 0) {
+    return [makeDefaultRow(1)];
+  }
+  return segments.map((segment, index) => rowFromSegment(segment, index));
+};
+
+const rowsEqual = (a: BuilderRow[], b: BuilderRow[]): boolean => {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (
+      a[i].name !== b[i].name ||
+      a[i].duration !== b[i].duration ||
+      a[i].unit !== b[i].unit ||
+      a[i].speedKmh !== b[i].speedKmh
+    ) {
+      return false;
+    }
+  }
+  return true;
+};
+
+const makeDefaultRow = (index: number): BuilderRow => ({
+  name: `Step ${index}`,
   duration: "10",
   unit: "m",
   speedKmh: "10",
@@ -70,28 +123,46 @@ export function FitCorrectionStudio() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [mode, setMode] = useState<"builder" | "notation">("builder");
-  const [rows, setRows] = useState<BuilderRow[]>([makeDefaultRow()]);
-  const [notation, setNotation] = useState("10m@10km/h, 5m@12km/h, 5m@9km/h");
+  const [rows, setRows] = useState<BuilderRow[]>(() => {
+    try {
+      return rowsFromSegments(parseIntervalsNotation(DEFAULT_NOTATION));
+    } catch {
+      return [makeDefaultRow(1)];
+    }
+  });
+  const [notation, setNotation] = useState(DEFAULT_NOTATION);
   const [result, setResult] = useState<ApiSuccess | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
 
-  const parsed = useMemo(() => {
+  const builderPayload = useMemo(
+    () =>
+      rows.map((row) => ({
+        name: row.name,
+        duration: Number(row.duration),
+        unit: row.unit,
+        speedKmh: Number(row.speedKmh),
+      })),
+    [rows]
+  );
+
+  const parsedBuilder = useMemo(() => {
     try {
-      if (mode === "builder") {
-        const payload = rows.map((row) => ({
-          duration: Number(row.duration),
-          unit: row.unit,
-          speedKmh: Number(row.speedKmh),
-        }));
+      const segments = normalizeBuilderSegments(builderPayload);
+      return {
+        segments,
+        error: null,
+      };
+    } catch (parseError) {
+      return {
+        segments: [] as WorkoutSegment[],
+        error: parseError instanceof Error ? parseError.message : "Could not parse workout input.",
+      };
+    }
+  }, [builderPayload]);
 
-        const segments = normalizeBuilderSegments(payload);
-        return {
-          segments,
-          error: null,
-        };
-      }
-
+  const parsedNotation = useMemo(() => {
+    try {
       const segments = parseIntervalsNotation(notation);
       return {
         segments,
@@ -103,7 +174,21 @@ export function FitCorrectionStudio() {
         error: parseError instanceof Error ? parseError.message : "Could not parse workout input.",
       };
     }
-  }, [mode, rows, notation]);
+  }, [notation]);
+
+  const parsed = mode === "builder" ? parsedBuilder : parsedNotation;
+
+  useEffect(() => {
+    if (mode !== "builder" || parsedBuilder.error) return;
+    const nextNotation = serializeIntervalsNotation(parsedBuilder.segments);
+    setNotation((current) => (current === nextNotation ? current : nextNotation));
+  }, [mode, parsedBuilder.error, parsedBuilder.segments]);
+
+  useEffect(() => {
+    if (mode !== "notation" || parsedNotation.error) return;
+    const nextRows = rowsFromSegments(parsedNotation.segments);
+    setRows((current) => (rowsEqual(current, nextRows) ? current : nextRows));
+  }, [mode, parsedNotation.error, parsedNotation.segments]);
 
   const workoutDuration = totalDurationSeconds(parsed.segments);
   const workoutDistance = totalDistanceKm(parsed.segments);
@@ -190,7 +275,7 @@ export function FitCorrectionStudio() {
   };
 
   const addRow = () => {
-    setRows((current) => [...current, makeDefaultRow()]);
+    setRows((current) => [...current, makeDefaultRow(current.length + 1)]);
   };
 
   const processFit = async () => {
@@ -210,12 +295,6 @@ export function FitCorrectionStudio() {
     setResult(null);
 
     try {
-      const builderPayload = rows.map((row) => ({
-        duration: Number(row.duration),
-        unit: row.unit,
-        speedKmh: Number(row.speedKmh),
-      }));
-
       const formData = new FormData();
       formData.append("fitFile", file);
       formData.append("mode", mode);
@@ -337,14 +416,20 @@ export function FitCorrectionStudio() {
                 <Button
                   variant={mode === "builder" ? "default" : "secondary"}
                   size="sm"
-                  onClick={() => setMode("builder")}
+                  onClick={() => {
+                    if (mode === "notation" && parsedNotation.error) return;
+                    setMode("builder");
+                  }}
                 >
                   Visual Builder
                 </Button>
                 <Button
                   variant={mode === "notation" ? "default" : "secondary"}
                   size="sm"
-                  onClick={() => setMode("notation")}
+                  onClick={() => {
+                    if (mode === "builder" && parsedBuilder.error) return;
+                    setMode("notation");
+                  }}
                 >
                   Text Notation
                 </Button>
@@ -364,6 +449,16 @@ export function FitCorrectionStudio() {
                   >
                     <div className="min-w-[110px] shrink-0 rounded-md bg-black/20 px-2 py-1 text-xs text-muted-foreground">
                       Step {index + 1}
+                    </div>
+
+                    <div className="min-w-[160px] flex-1">
+                      <label className="mb-1 block text-xs text-muted-foreground">Name</label>
+                      <Input
+                        type="text"
+                        value={row.name}
+                        placeholder={`Step ${index + 1}`}
+                        onChange={(event) => updateRow(index, { name: event.target.value })}
+                      />
                     </div>
 
                     <div className="min-w-[120px] flex-1">
@@ -419,10 +514,10 @@ export function FitCorrectionStudio() {
                   value={notation}
                   onChange={(event) => setNotation(event.target.value)}
                   className="glass-input min-h-[150px] w-full resize-y rounded-md border px-3 py-2 font-mono text-sm"
-                  placeholder="Example: 3x(2m@14km/h,1m@8km/h), 10m@10km/h"
+                  placeholder="Example: 3x(2m@14km/h{Fast},1m@8km/h{Recovery}), 10m@10km/h{Warm Up}"
                 />
                 <p className="text-xs text-muted-foreground">
-                  Supported: 10m@10km/h, 45s@5m/s, 3x(2m@14,1m@8)
+                  Supported: 10m@10km/h, 45s@5m/s, 3x(2m@14,1m@8), and optional names: 45s@16.3km/h{"{Step 43}"}
                 </p>
               </div>
             )}

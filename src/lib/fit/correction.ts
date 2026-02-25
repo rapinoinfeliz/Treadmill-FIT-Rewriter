@@ -1,5 +1,9 @@
 import { Decoder, Encoder, Profile, Stream, Utils } from "@garmin/fitsdk";
-import { speedAtElapsedSeconds, WorkoutSegment } from "@/lib/fit/prescription";
+import {
+  distanceMetersBetweenElapsedSeconds,
+  speedAtElapsedSeconds,
+  WorkoutSegment,
+} from "@/lib/fit/prescription";
 
 type FitMessage = Record<string, unknown> & {
   developerFields?: Record<string, unknown>;
@@ -50,6 +54,7 @@ const MESG_NUM = {
   fileId: Number(Profile?.MesgNum?.FILE_ID ?? 0),
   record: Number(Profile?.MesgNum?.RECORD ?? 20),
   lap: Number(Profile?.MesgNum?.LAP ?? 19),
+  segmentLap: Number(Profile?.MesgNum?.SEGMENT_LAP ?? 142),
   session: Number(Profile?.MesgNum?.SESSION ?? 18),
   activity: Number(Profile?.MesgNum?.ACTIVITY ?? 34),
   event: Number(Profile?.MesgNum?.EVENT ?? 21),
@@ -461,8 +466,9 @@ const injectWorkoutMessages = (
     };
   };
 
-  const buildWorkoutLapMessages = (): OrderedMessage[] => {
+  const buildWorkoutLapMessages = (): { laps: OrderedMessage[]; segmentLaps: OrderedMessage[] } => {
     const lapMessages: OrderedMessage[] = [];
+    const segmentLapMessages: OrderedMessage[] = [];
     const activityStartMs = records[0].timestampMs;
     const activityEndMs = records[records.length - 1].timestampMs;
     let elapsedCursor = 0;
@@ -500,6 +506,25 @@ const injectWorkoutMessages = (
         },
       });
 
+      segmentLapMessages.push({
+        mesgNum: MESG_NUM.segmentLap,
+        message: {
+          timestamp: new Date(activityStartMs),
+          startTime: new Date(summary.startMs),
+          totalElapsedTime: summary.totalTimerTime,
+          totalTimerTime: summary.totalTimerTime,
+          totalDistance: summary.totalDistance,
+          avgSpeed: summary.avgSpeed,
+          maxSpeed: summary.maxSpeed,
+          messageIndex: stepIndex,
+          wktStepIndex: stepIndex,
+          event: "lap",
+          eventType: "stop",
+          sport: "running",
+          subSport: "treadmill",
+        },
+      });
+
       elapsedCursor += segment.durationSeconds;
     }
 
@@ -526,14 +551,20 @@ const injectWorkoutMessages = (
       },
     });
 
-    return lapMessages;
+    return {
+      laps: lapMessages,
+      segmentLaps: segmentLapMessages,
+    };
   };
 
-  const generatedLaps = buildWorkoutLapMessages();
+  const generatedLapData = buildWorkoutLapMessages();
+  const generatedLaps = generatedLapData.laps;
+  const generatedSegmentLaps = generatedLapData.segmentLaps;
 
   const base = messages.filter((entry) => {
     if (
       entry.mesgNum === MESG_NUM.lap ||
+      entry.mesgNum === MESG_NUM.segmentLap ||
       entry.mesgNum === MESG_NUM.workout ||
       entry.mesgNum === MESG_NUM.workoutStep ||
       entry.mesgNum === MESG_NUM.workoutSession ||
@@ -565,12 +596,13 @@ const injectWorkoutMessages = (
   const steps: OrderedMessage[] = segments.map((segment, index) => {
     const target = Math.round((segment.speedKmh / 3.6) * 1000);
     const durationMs = Math.round(segment.durationSeconds * 1000);
+    const stepName = segment.name?.trim() || `Step ${index + 1}`;
 
     return {
       mesgNum: MESG_NUM.workoutStep,
       message: {
         messageIndex: index,
-        wktStepName: `Step ${index + 1}`,
+        wktStepName: stepName,
         durationType: "time",
         durationValue: durationMs,
         targetType: "speed",
@@ -578,7 +610,7 @@ const injectWorkoutMessages = (
         customTargetValueLow: target,
         customTargetValueHigh: target,
         intensity: "active",
-        notes: `${segment.durationSeconds}s @ ${segment.speedKmh.toFixed(1)} km/h`,
+        notes: `${stepName}: ${segment.durationSeconds}s @ ${segment.speedKmh.toFixed(1)} km/h`,
       },
     };
   });
@@ -590,7 +622,10 @@ const injectWorkoutMessages = (
     "serialNumber" in fileId;
 
   const sourceWorkoutSeed = segments
-    .map((segment, index) => `${index + 1}:${segment.durationSeconds.toFixed(3)}@${segment.speedKmh.toFixed(3)}`)
+    .map(
+      (segment, index) =>
+        `${index + 1}:${segment.durationSeconds.toFixed(3)}@${segment.speedKmh.toFixed(3)}:${segment.name ?? ""}`
+    )
     .join("|");
   const workoutSerialNumber = computeHash32(sourceWorkoutSeed);
   const workoutCreatedMs = Math.max(records[0].timestampMs - 60_000, FIT_EPOCH_MS + 1_000);
@@ -611,7 +646,7 @@ const injectWorkoutMessages = (
       }
     : null;
 
-  const staticWorkoutMessages = [...generatedLaps];
+  const staticWorkoutMessages = [...generatedLaps, ...generatedSegmentLaps];
   if (trainingFile) {
     staticWorkoutMessages.push(trainingFile);
   }
@@ -693,8 +728,11 @@ const collectRecordStates = (messages: OrderedMessage[], segments: WorkoutSegmen
     }
 
     const prev = records[i - 1];
-    const deltaSeconds = Math.max((current.timestampMs - prev.timestampMs) / 1000, 0);
-    const deltaDistance = ((prev.correctedSpeedMps + correctedSpeedMps) / 2) * deltaSeconds;
+    const deltaDistance = distanceMetersBetweenElapsedSeconds(
+      segments,
+      prev.elapsedSeconds,
+      current.elapsedSeconds
+    );
     cumulativeDistance += deltaDistance;
     current.correctedDistanceM = cumulativeDistance;
   }

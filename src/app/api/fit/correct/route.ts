@@ -13,6 +13,7 @@ type BuilderPayload = {
   duration: number;
   unit: "s" | "m" | "h";
   speedKmh: number;
+  name?: string;
 };
 
 const parseBuilderPayload = (raw: FormDataEntryValue | null): WorkoutSegment[] => {
@@ -42,6 +43,7 @@ const parseBuilderPayload = (raw: FormDataEntryValue | null): WorkoutSegment[] =
       duration: Number(segment.duration),
       unit: String(segment.unit ?? "m") as "s" | "m" | "h",
       speedKmh: Number(segment.speedKmh),
+      name: typeof segment.name === "string" ? segment.name : undefined,
     };
   });
 

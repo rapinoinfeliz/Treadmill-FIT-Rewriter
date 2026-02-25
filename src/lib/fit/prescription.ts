@@ -4,11 +4,13 @@ export type BuilderSegmentInput = {
   duration: number;
   unit: DurationUnit;
   speedKmh: number;
+  name?: string;
 };
 
 export type WorkoutSegment = {
   durationSeconds: number;
   speedKmh: number;
+  name?: string;
 };
 
 const DURATION_ALIASES: Record<string, DurationUnit> = {
@@ -53,6 +55,13 @@ const convertSpeedToKmh = (value: number, unit: "kmh" | "mps" | "mph"): number =
   return value * 1.609344;
 };
 
+const normalizeSegmentName = (value: unknown): string | undefined => {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  return trimmed.replace(/[{}]/g, "").slice(0, 80);
+};
+
 const ensureSegment = (segment: WorkoutSegment, context: string): WorkoutSegment => {
   if (!Number.isFinite(segment.durationSeconds) || segment.durationSeconds <= 0) {
     throw new Error(`${context}: invalid duration.`);
@@ -64,6 +73,7 @@ const ensureSegment = (segment: WorkoutSegment, context: string): WorkoutSegment
   return {
     durationSeconds: segment.durationSeconds,
     speedKmh: segment.speedKmh,
+    name: normalizeSegmentName(segment.name),
   };
 };
 
@@ -85,6 +95,7 @@ export const normalizeBuilderSegments = (inputs: BuilderSegmentInput[]): Workout
       {
         durationSeconds,
         speedKmh,
+        name: input.name,
       },
       `Step ${index + 1}`
     );
@@ -205,16 +216,42 @@ class NotationParser {
 
     const durationSeconds = convertDurationToSeconds(firstNumber, durationUnit);
     const speedKmh = convertSpeedToKmh(speedValue, speedUnit);
+    const name = this.parseOptionalName();
 
     return [
       ensureSegment(
         {
           durationSeconds,
           speedKmh,
+          name,
         },
         "Notation"
       ),
     ];
+  }
+
+  private parseOptionalName(): string | undefined {
+    this.skipWhitespace();
+
+    if (this.peek() !== "{") {
+      return undefined;
+    }
+
+    this.index += 1;
+    const start = this.index;
+
+    while (this.index < this.source.length && this.source[this.index] !== "}") {
+      this.index += 1;
+    }
+
+    if (this.peek() !== "}") {
+      throw this.error("Expected '}' to close step name");
+    }
+
+    const label = this.source.slice(start, this.index).trim();
+    this.index += 1;
+
+    return normalizeSegmentName(label);
   }
 
   private parseNumber(errorMessage: string): number {
@@ -301,6 +338,34 @@ export const parseIntervalsNotation = (input: string): WorkoutSegment[] => {
   return parser.parse();
 };
 
+const formatCompactNumber = (value: number, maxDecimals = 3): string => {
+  if (!Number.isFinite(value)) return "0";
+  return value.toFixed(maxDecimals).replace(/\.?0+$/, "");
+};
+
+const durationToNotation = (durationSeconds: number): { value: number; unit: DurationUnit } => {
+  const EPSILON = 1e-9;
+  if (Math.abs(durationSeconds % 3600) <= EPSILON) {
+    return { value: durationSeconds / 3600, unit: "h" };
+  }
+  if (Math.abs(durationSeconds % 60) <= EPSILON) {
+    return { value: durationSeconds / 60, unit: "m" };
+  }
+  return { value: durationSeconds, unit: "s" };
+};
+
+export const serializeIntervalsNotation = (segments: WorkoutSegment[]): string => {
+  return segments
+    .map((segment) => {
+      const duration = durationToNotation(segment.durationSeconds);
+      const durationText = `${formatCompactNumber(duration.value)}${duration.unit}`;
+      const speedText = `${formatCompactNumber(segment.speedKmh)}km/h`;
+      const nameSuffix = segment.name ? `{${segment.name}}` : "";
+      return `${durationText}@${speedText}${nameSuffix}`;
+    })
+    .join(", ");
+};
+
 export const totalDurationSeconds = (segments: WorkoutSegment[]): number => {
   return segments.reduce((total, segment) => total + segment.durationSeconds, 0);
 };
@@ -319,16 +384,67 @@ export const speedAtElapsedSeconds = (segments: WorkoutSegment[], elapsedSeconds
     return segments[0].speedKmh;
   }
 
+  const EPSILON = 1e-9;
   let cursor = 0;
-  for (const segment of segments) {
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index];
     const end = cursor + segment.durationSeconds;
-    if (elapsedSeconds <= end) {
+    if (elapsedSeconds < end - EPSILON) {
       return segment.speedKmh;
     }
+
+    if (Math.abs(elapsedSeconds - end) <= EPSILON) {
+      const next = segments[index + 1];
+      if (!next) return segment.speedKmh;
+      // At exact boundaries, prefer the faster side to avoid a 1-sample slow dip
+      // that can reduce interval pace/distance in external workout analyzers.
+      return Math.max(segment.speedKmh, next.speedKmh);
+    }
+
     cursor = end;
   }
 
   return segments[segments.length - 1].speedKmh;
+};
+
+export const distanceMetersBetweenElapsedSeconds = (
+  segments: WorkoutSegment[],
+  startSeconds: number,
+  endSeconds: number
+): number => {
+  if (segments.length === 0) return 0;
+
+  const start = Math.max(startSeconds, 0);
+  const end = Math.max(endSeconds, 0);
+  if (end <= start) return 0;
+
+  let cursor = 0;
+  let totalKm = 0;
+
+  for (const segment of segments) {
+    const segStart = cursor;
+    const segEnd = cursor + segment.durationSeconds;
+
+    const overlapStart = Math.max(start, segStart);
+    const overlapEnd = Math.min(end, segEnd);
+
+    if (overlapEnd > overlapStart) {
+      totalKm += ((overlapEnd - overlapStart) / 3600) * segment.speedKmh;
+    }
+
+    cursor = segEnd;
+    if (cursor >= end) {
+      break;
+    }
+  }
+
+  // Keep previous behavior after workout end: hold last step speed.
+  if (end > cursor) {
+    const lastSpeed = segments[segments.length - 1].speedKmh;
+    totalKm += ((end - cursor) / 3600) * lastSpeed;
+  }
+
+  return totalKm * 1000;
 };
 
 export const formatSegmentLabel = (segment: WorkoutSegment): string => {
@@ -342,5 +458,6 @@ export const formatSegmentLabel = (segment: WorkoutSegment): string => {
         ? `${mins}m`
         : `${remainingSeconds}s`;
 
-  return `${durationText} @ ${segment.speedKmh.toFixed(1)} km/h`;
+  const base = `${durationText} @ ${segment.speedKmh.toFixed(1)} km/h`;
+  return segment.name ? `${segment.name}: ${base}` : base;
 };
