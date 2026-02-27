@@ -8,6 +8,7 @@ export type BuilderRow = {
   unit: DurationUnit;
   speedKmh: string;
   pace: string;
+  inclinePercent: string;
 };
 
 export type BuilderSpeedDisplay = "kmh" | "pace";

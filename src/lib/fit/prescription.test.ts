@@ -28,6 +28,12 @@ describe("parseIntervalsNotation", () => {
     expect(segments[1].speedKmh).toBeCloseTo(14.4, 6);
     expect(segments[2].speedKmh).toBeCloseTo(9.656064, 6);
   });
+
+  it("parses incline percentages", () => {
+    const segments = parseIntervalsNotation("2m@14km/h 4%,1m@8km/h -1.5%");
+    expect(segments[0].inclinePercent).toBeCloseTo(4, 6);
+    expect(segments[1].inclinePercent).toBeCloseTo(-1.5, 6);
+  });
 });
 
 describe("serializeIntervalsNotation", () => {
@@ -35,6 +41,11 @@ describe("serializeIntervalsNotation", () => {
     const segments = parseIntervalsNotation("2m@14km/h{Fast},1m@8km/h{Easy}");
     const notation = serializeIntervalsNotation(segments);
     expect(notation).toBe("2m@14km/h{Fast}, 1m@8km/h{Easy}");
+  });
+
+  it("serializes non-zero incline", () => {
+    const segments = parseIntervalsNotation("45s@16.3km/h 6%{Rep}");
+    expect(serializeIntervalsNotation(segments)).toBe("45s@16.3km/h 6%{Rep}");
   });
 });
 
@@ -52,7 +63,13 @@ describe("workout math", () => {
 
   it("validates invalid builder values", () => {
     expect(() =>
-      normalizeBuilderSegments([{ duration: 0, unit: "m", speedKmh: 10 }])
+      normalizeBuilderSegments([{ duration: 0, unit: "m", speedKmh: 10, inclinePercent: 0 }])
+    ).toThrowError();
+  });
+
+  it("validates invalid incline range", () => {
+    expect(() =>
+      normalizeBuilderSegments([{ duration: 1, unit: "m", speedKmh: 10, inclinePercent: 60 }])
     ).toThrowError();
   });
 });

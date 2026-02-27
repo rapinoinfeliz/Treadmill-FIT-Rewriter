@@ -4,12 +4,14 @@ export type BuilderSegmentInput = {
   duration: number;
   unit: DurationUnit;
   speedKmh: number;
+  inclinePercent?: number;
   name?: string;
 };
 
 export type WorkoutSegment = {
   durationSeconds: number;
   speedKmh: number;
+  inclinePercent: number;
   name?: string;
 };
 
@@ -86,10 +88,18 @@ const ensureSegment = (segment: WorkoutSegment, context: string): WorkoutSegment
   if (!Number.isFinite(segment.speedKmh) || segment.speedKmh < 0) {
     throw new Error(`${context}: invalid speed.`);
   }
+  if (
+    !Number.isFinite(segment.inclinePercent) ||
+    segment.inclinePercent < -40 ||
+    segment.inclinePercent > 40
+  ) {
+    throw new Error(`${context}: invalid incline. Use a value between -40% and 40%.`);
+  }
 
   return {
     durationSeconds: segment.durationSeconds,
     speedKmh: segment.speedKmh,
+    inclinePercent: segment.inclinePercent,
     name: normalizeSegmentName(segment.name),
   };
 };
@@ -107,11 +117,13 @@ export const normalizeBuilderSegments = (inputs: BuilderSegmentInput[]): Workout
 
     const durationSeconds = convertDurationToSeconds(Number(input.duration), unit);
     const speedKmh = Number(input.speedKmh);
+    const inclinePercent = Number(input.inclinePercent ?? 0);
 
     return ensureSegment(
       {
         durationSeconds,
         speedKmh,
+        inclinePercent,
         name: input.name,
       },
       `Step ${index + 1}`
@@ -256,6 +268,7 @@ class NotationParser {
       stepLength.type === "time"
         ? stepLength.durationSeconds
         : this.distanceStepToDurationSeconds(stepLength.distanceKm, speedKmh);
+    const inclinePercent = this.parseOptionalInclinePercent();
     const name = this.parseOptionalName();
 
     return [
@@ -263,11 +276,26 @@ class NotationParser {
         {
           durationSeconds,
           speedKmh,
+          inclinePercent,
           name,
         },
         "Notation"
       ),
     ];
+  }
+
+  private parseOptionalInclinePercent(): number {
+    const remaining = this.source.slice(this.index);
+    const match = remaining.match(
+      /^\s*(?:,\s*)?(?:(?:incl(?:ine)?|grade)\s*)?([+-]?\d+(?:\.\d+)?)\s*%/i
+    );
+
+    if (!match) {
+      return 0;
+    }
+
+    this.index += match[0].length;
+    return Number(match[1]);
   }
 
   private parseStepLength(firstNumber: number):
@@ -492,8 +520,12 @@ export const serializeIntervalsNotation = (segments: WorkoutSegment[]): string =
       const duration = durationToNotation(segment.durationSeconds);
       const durationText = `${formatCompactNumber(duration.value)}${duration.unit}`;
       const speedText = `${formatCompactNumber(segment.speedKmh)}km/h`;
+      const inclineText =
+        Math.abs(segment.inclinePercent) > 1e-9
+          ? ` ${formatCompactNumber(segment.inclinePercent)}%`
+          : "";
       const nameSuffix = segment.name ? `{${segment.name}}` : "";
-      return `${durationText}@${speedText}${nameSuffix}`;
+      return `${durationText}@${speedText}${inclineText}${nameSuffix}`;
     })
     .join(", ");
 };
@@ -537,6 +569,34 @@ export const speedAtElapsedSeconds = (segments: WorkoutSegment[], elapsedSeconds
   }
 
   return segments[segments.length - 1].speedKmh;
+};
+
+export const inclineAtElapsedSeconds = (
+  segments: WorkoutSegment[],
+  elapsedSeconds: number
+): number => {
+  if (segments.length === 0) return 0;
+
+  if (elapsedSeconds <= 0) {
+    return segments[0].inclinePercent;
+  }
+
+  const EPSILON = 1e-9;
+  let cursor = 0;
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index];
+    const end = cursor + segment.durationSeconds;
+    if (elapsedSeconds < end - EPSILON) {
+      return segment.inclinePercent;
+    }
+    if (Math.abs(elapsedSeconds - end) <= EPSILON) {
+      const next = segments[index + 1];
+      return next ? next.inclinePercent : segment.inclinePercent;
+    }
+    cursor = end;
+  }
+
+  return segments[segments.length - 1].inclinePercent;
 };
 
 export const distanceMetersBetweenElapsedSeconds = (
@@ -590,6 +650,8 @@ export const formatSegmentLabel = (segment: WorkoutSegment): string => {
         ? `${mins}m`
         : `${remainingSeconds}s`;
 
-  const base = `${durationText} @ ${segment.speedKmh.toFixed(1)} km/h`;
+  const inclineText =
+    Math.abs(segment.inclinePercent) > 1e-9 ? ` ${segment.inclinePercent.toFixed(1)}%` : "";
+  const base = `${durationText} @ ${segment.speedKmh.toFixed(1)} km/h${inclineText}`;
   return segment.name ? `${segment.name}: ${base}` : base;
 };

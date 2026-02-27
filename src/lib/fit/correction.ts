@@ -1,6 +1,7 @@
 import { Decoder, Encoder, Profile, Stream, Utils } from "@garmin/fitsdk";
 import {
   distanceMetersBetweenElapsedSeconds,
+  inclineAtElapsedSeconds,
   speedAtElapsedSeconds,
   WorkoutSegment,
 } from "@/lib/fit/prescription";
@@ -19,8 +20,11 @@ type RecordState = {
   elapsedSeconds: number;
   originalSpeedMps: number;
   originalDistanceM: number | null;
+  originalAltitudeM: number | null;
   correctedSpeedMps: number;
   correctedDistanceM: number;
+  correctedGradePercent: number;
+  correctedAltitudeM: number;
   orderedIndexes: number[];
 };
 
@@ -136,6 +140,14 @@ const readSpeedCandidate = (message: FitMessage): number | null => {
   return null;
 };
 
+const readAltitudeCandidate = (message: FitMessage): number | null => {
+  const enhanced = toNumber(message.enhancedAltitude);
+  if (enhanced !== null) return enhanced;
+  const altitude = toNumber(message.altitude);
+  if (altitude !== null) return altitude;
+  return null;
+};
+
 const getTimestampMs = (message: FitMessage): number | null => {
   const parsed = toDate(message.timestamp);
   return parsed ? parsed.getTime() : null;
@@ -170,15 +182,17 @@ const findClosestIndex = (records: RecordState[], timestampMs: number): number =
 const interpolateStateAt = (
   records: RecordState[],
   timestampMs: number
-): { distanceM: number; speedMps: number } => {
+): { distanceM: number; speedMps: number; altitudeM: number; gradePercent: number } => {
   if (records.length === 0) {
-    return { distanceM: 0, speedMps: 0 };
+    return { distanceM: 0, speedMps: 0, altitudeM: 0, gradePercent: 0 };
   }
 
   if (timestampMs <= records[0].timestampMs) {
     return {
       distanceM: records[0].correctedDistanceM,
       speedMps: records[0].correctedSpeedMps,
+      altitudeM: records[0].correctedAltitudeM,
+      gradePercent: records[0].correctedGradePercent,
     };
   }
 
@@ -187,6 +201,8 @@ const interpolateStateAt = (
     return {
       distanceM: last.correctedDistanceM,
       speedMps: last.correctedSpeedMps,
+      altitudeM: last.correctedAltitudeM,
+      gradePercent: last.correctedGradePercent,
     };
   }
 
@@ -198,6 +214,8 @@ const interpolateStateAt = (
     return {
       distanceM: a.correctedDistanceM,
       speedMps: a.correctedSpeedMps,
+      altitudeM: a.correctedAltitudeM,
+      gradePercent: a.correctedGradePercent,
     };
   }
 
@@ -206,6 +224,8 @@ const interpolateStateAt = (
   return {
     distanceM: a.correctedDistanceM + (b.correctedDistanceM - a.correctedDistanceM) * ratio,
     speedMps: a.correctedSpeedMps + (b.correctedSpeedMps - a.correctedSpeedMps) * ratio,
+    altitudeM: a.correctedAltitudeM + (b.correctedAltitudeM - a.correctedAltitudeM) * ratio,
+    gradePercent: a.correctedGradePercent + (b.correctedGradePercent - a.correctedGradePercent) * ratio,
   };
 };
 
@@ -303,6 +323,20 @@ const applyRangeSummary = (message: FitMessage, records: RecordState[]): void =>
     maxSpeed = Math.max(start.speedMps, end.speedMps);
   }
 
+  let totalAscent = 0;
+  let totalDescent = 0;
+  let previousAltitude = start.altitudeM;
+  for (let i = from + 1; i <= to; i += 1) {
+    const currentAltitude = records[i].correctedAltitudeM;
+    const delta = currentAltitude - previousAltitude;
+    if (delta > 0) totalAscent += delta;
+    if (delta < 0) totalDescent += -delta;
+    previousAltitude = currentAltitude;
+  }
+  const tailDelta = end.altitudeM - previousAltitude;
+  if (tailDelta > 0) totalAscent += tailDelta;
+  if (tailDelta < 0) totalDescent += -tailDelta;
+
   // Preserve message schema: only mutate fields that already exist.
   if ("totalTimerTime" in message) message.totalTimerTime = totalTimerTime;
   if ("totalElapsedTime" in message) message.totalElapsedTime = totalTimerTime;
@@ -311,6 +345,8 @@ const applyRangeSummary = (message: FitMessage, records: RecordState[]): void =>
   if ("maxSpeed" in message) message.maxSpeed = maxSpeed;
   if ("enhancedAvgSpeed" in message) message.enhancedAvgSpeed = avgSpeed;
   if ("enhancedMaxSpeed" in message) message.enhancedMaxSpeed = maxSpeed;
+  if ("totalAscent" in message) message.totalAscent = totalAscent;
+  if ("totalDescent" in message) message.totalDescent = totalDescent;
 };
 
 const computeIntegratedOriginalDistance = (records: RecordState[]): number => {
@@ -476,6 +512,20 @@ const injectWorkoutMessages = (
       maxSpeed = Math.max(start.speedMps, end.speedMps);
     }
 
+    let totalAscent = 0;
+    let totalDescent = 0;
+    let previousAltitude = start.altitudeM;
+    for (let i = from + 1; i <= to; i += 1) {
+      const currentAltitude = records[i].correctedAltitudeM;
+      const delta = currentAltitude - previousAltitude;
+      if (delta > 0) totalAscent += delta;
+      if (delta < 0) totalDescent += -delta;
+      previousAltitude = currentAltitude;
+    }
+    const tailDelta = end.altitudeM - previousAltitude;
+    if (tailDelta > 0) totalAscent += tailDelta;
+    if (tailDelta < 0) totalDescent += -tailDelta;
+
     return {
       startMs,
       endMs,
@@ -483,6 +533,8 @@ const injectWorkoutMessages = (
       totalDistance,
       avgSpeed,
       maxSpeed,
+      totalAscent,
+      totalDescent,
     };
   };
 
@@ -515,6 +567,8 @@ const injectWorkoutMessages = (
           maxSpeed: summary.maxSpeed,
           enhancedAvgSpeed: summary.avgSpeed,
           enhancedMaxSpeed: summary.maxSpeed,
+          totalAscent: summary.totalAscent,
+          totalDescent: summary.totalDescent,
           messageIndex: stepIndex,
           wktStepIndex: stepIndex,
           event: "lap",
@@ -536,6 +590,8 @@ const injectWorkoutMessages = (
           totalDistance: summary.totalDistance,
           avgSpeed: summary.avgSpeed,
           maxSpeed: summary.maxSpeed,
+          totalAscent: summary.totalAscent,
+          totalDescent: summary.totalDescent,
           messageIndex: stepIndex,
           wktStepIndex: stepIndex,
           event: "lap",
@@ -562,6 +618,8 @@ const injectWorkoutMessages = (
         maxSpeed: tailSummary.maxSpeed,
         enhancedAvgSpeed: tailSummary.avgSpeed,
         enhancedMaxSpeed: tailSummary.maxSpeed,
+        totalAscent: tailSummary.totalAscent,
+        totalDescent: tailSummary.totalDescent,
         messageIndex: lapMessages.length,
         event: "lap",
         eventType: "stop",
@@ -617,6 +675,8 @@ const injectWorkoutMessages = (
     const target = Math.round((segment.speedKmh / 3.6) * 1000);
     const durationMs = Math.round(segment.durationSeconds * 1000);
     const stepName = segment.name?.trim() || `Step ${index + 1}`;
+    const inclineText =
+      Math.abs(segment.inclinePercent) > 1e-9 ? `, ${segment.inclinePercent.toFixed(1)}% incline` : "";
 
     return {
       mesgNum: MESG_NUM.workoutStep,
@@ -630,7 +690,7 @@ const injectWorkoutMessages = (
         customTargetValueLow: target,
         customTargetValueHigh: target,
         intensity: "active",
-        notes: `${stepName}: ${segment.durationSeconds}s @ ${segment.speedKmh.toFixed(1)} km/h`,
+        notes: `${stepName}: ${segment.durationSeconds}s @ ${segment.speedKmh.toFixed(1)} km/h${inclineText}`,
       },
     };
   });
@@ -644,7 +704,7 @@ const injectWorkoutMessages = (
   const sourceWorkoutSeed = segments
     .map(
       (segment, index) =>
-        `${index + 1}:${segment.durationSeconds.toFixed(3)}@${segment.speedKmh.toFixed(3)}:${segment.name ?? ""}`
+        `${index + 1}:${segment.durationSeconds.toFixed(3)}@${segment.speedKmh.toFixed(3)}:${segment.inclinePercent.toFixed(3)}:${segment.name ?? ""}`
     )
     .join("|");
   const workoutSerialNumber = computeHash32(sourceWorkoutSeed);
@@ -702,12 +762,14 @@ const collectRecordStates = (messages: OrderedMessage[], segments: WorkoutSegmen
 
     const speedCandidate = readSpeedCandidate(entry.message);
     const distanceCandidate = toNumber(entry.message.distance);
+    const altitudeCandidate = readAltitudeCandidate(entry.message);
 
     const existing = byTimestamp.get(timestampMs);
     if (existing) {
       existing.orderedIndexes.push(orderedIndex);
       if (speedCandidate !== null) existing.originalSpeedMps = speedCandidate;
       if (distanceCandidate !== null) existing.originalDistanceM = distanceCandidate;
+      if (altitudeCandidate !== null) existing.originalAltitudeM = altitudeCandidate;
       return;
     }
 
@@ -716,8 +778,11 @@ const collectRecordStates = (messages: OrderedMessage[], segments: WorkoutSegmen
       elapsedSeconds: 0,
       originalSpeedMps: speedCandidate ?? 0,
       originalDistanceM: distanceCandidate,
+      originalAltitudeM: altitudeCandidate,
       correctedSpeedMps: 0,
       correctedDistanceM: 0,
+      correctedGradePercent: 0,
+      correctedAltitudeM: 0,
       orderedIndexes: [orderedIndex],
     });
   });
@@ -730,8 +795,10 @@ const collectRecordStates = (messages: OrderedMessage[], segments: WorkoutSegmen
 
   const firstTimestampMs = records[0].timestampMs;
   const firstKnownDistance = records.find((item) => item.originalDistanceM !== null)?.originalDistanceM ?? 0;
+  const firstKnownAltitude = records.find((item) => item.originalAltitudeM !== null)?.originalAltitudeM ?? 0;
 
   let cumulativeDistance = firstKnownDistance;
+  let cumulativeAltitude = firstKnownAltitude;
 
   for (let i = 0; i < records.length; i += 1) {
     const current = records[i];
@@ -741,9 +808,11 @@ const collectRecordStates = (messages: OrderedMessage[], segments: WorkoutSegmen
     const correctedSpeedKmh = speedAtElapsedSeconds(segments, elapsedSeconds);
     const correctedSpeedMps = Math.max(correctedSpeedKmh / 3.6, 0);
     current.correctedSpeedMps = correctedSpeedMps;
+    current.correctedGradePercent = inclineAtElapsedSeconds(segments, elapsedSeconds);
 
     if (i === 0) {
       current.correctedDistanceM = cumulativeDistance;
+      current.correctedAltitudeM = cumulativeAltitude;
       continue;
     }
 
@@ -755,6 +824,11 @@ const collectRecordStates = (messages: OrderedMessage[], segments: WorkoutSegmen
     );
     cumulativeDistance += deltaDistance;
     current.correctedDistanceM = cumulativeDistance;
+
+    const averageGradePercent = (prev.correctedGradePercent + current.correctedGradePercent) / 2;
+    const elevationDelta = deltaDistance * (averageGradePercent / 100);
+    cumulativeAltitude += elevationDelta;
+    current.correctedAltitudeM = cumulativeAltitude;
   }
 
   return records;
@@ -780,6 +854,14 @@ const patchMessages = (messages: OrderedMessage[], records: RecordState[]): void
       if ("speed" in entry.message) entry.message.speed = record.correctedSpeedMps;
       if ("enhancedSpeed" in entry.message) entry.message.enhancedSpeed = record.correctedSpeedMps;
       if ("distance" in entry.message) entry.message.distance = record.correctedDistanceM;
+      if ("grade" in entry.message) entry.message.grade = record.correctedGradePercent;
+      if ("altitude" in entry.message) entry.message.altitude = record.correctedAltitudeM;
+      if ("enhancedAltitude" in entry.message) {
+        entry.message.enhancedAltitude = record.correctedAltitudeM;
+      }
+      if ("verticalSpeed" in entry.message) {
+        entry.message.verticalSpeed = record.correctedSpeedMps * (record.correctedGradePercent / 100);
+      }
       continue;
     }
 

@@ -70,6 +70,7 @@ const rowFromSegment = (segment: WorkoutSegment, index: number): BuilderRow => {
     unit,
     speedKmh: formatInputNumber(segment.speedKmh),
     pace: formatPaceInput(segment.speedKmh),
+    inclinePercent: formatInputNumber(segment.inclinePercent),
   };
 };
 
@@ -87,7 +88,8 @@ const rowsEqual = (a: BuilderRow[], b: BuilderRow[]): boolean => {
       a[i].name !== b[i].name ||
       a[i].duration !== b[i].duration ||
       a[i].unit !== b[i].unit ||
-      a[i].speedKmh !== b[i].speedKmh
+      a[i].speedKmh !== b[i].speedKmh ||
+      a[i].inclinePercent !== b[i].inclinePercent
     ) {
       return false;
     }
@@ -104,6 +106,7 @@ const makeDefaultRow = (index: number): BuilderRow => {
     unit: "m",
     speedKmh,
     pace: formatPaceInput(Number(speedKmh)),
+    inclinePercent: "0",
   };
 };
 
@@ -140,6 +143,7 @@ export function FitCorrectionStudio() {
         duration: parseNumericInput(row.duration),
         unit: row.unit,
         speedKmh: parseNumericInput(row.speedKmh),
+        inclinePercent: parseNumericInput(row.inclinePercent),
       })),
     [rows]
   );
@@ -440,6 +444,7 @@ export function FitCorrectionStudio() {
             onRowDurationChange={(index, value) => updateRow(index, { duration: value })}
             onRowDurationUnitChange={(index, value) => updateRow(index, { unit: value })}
             onRowSpeedChange={setRowSpeed}
+            onRowInclineChange={(index, value) => updateRow(index, { inclinePercent: value })}
             onRemoveRow={removeRow}
             onAddRow={addRow}
             notation={notation}

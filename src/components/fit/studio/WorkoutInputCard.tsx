@@ -20,6 +20,7 @@ type WorkoutInputCardProps = {
   onRowDurationChange: (index: number, value: string) => void;
   onRowDurationUnitChange: (index: number, value: DurationUnit) => void;
   onRowSpeedChange: (index: number, value: string) => void;
+  onRowInclineChange: (index: number, value: string) => void;
   onRemoveRow: (index: number) => void;
   onAddRow: () => void;
   notation: string;
@@ -41,6 +42,7 @@ export function WorkoutInputCard({
   onRowDurationChange,
   onRowDurationUnitChange,
   onRowSpeedChange,
+  onRowInclineChange,
   onRemoveRow,
   onAddRow,
   notation,
@@ -143,7 +145,7 @@ export function WorkoutInputCard({
                 </div>
               </div>
 
-              <div className="md:col-span-3">
+              <div className="md:col-span-2">
                 <label className="mb-1 block text-xs text-muted-foreground">
                   {speedDisplay === "kmh" ? "Speed (km/h)" : "Pace (min/km)"}
                 </label>
@@ -153,6 +155,17 @@ export function WorkoutInputCard({
                   value={speedDisplay === "kmh" ? row.speedKmh : row.pace}
                   placeholder={speedDisplay === "kmh" ? "10.0" : "4:30"}
                   onChange={(event) => onRowSpeedChange(index, event.target.value)}
+                />
+              </div>
+
+              <div className="md:col-span-1">
+                <label className="mb-1 block text-xs text-muted-foreground">Incline (%)</label>
+                <Input
+                  type="number"
+                  step="0.1"
+                  value={row.inclinePercent}
+                  placeholder="0"
+                  onChange={(event) => onRowInclineChange(index, event.target.value)}
                 />
               </div>
             </div>
@@ -168,10 +181,11 @@ export function WorkoutInputCard({
             value={notation}
             onChange={(event) => onNotationChange(event.target.value)}
             className="glass-input min-h-[150px] w-full resize-y rounded-md border px-3 py-2 font-mono text-sm"
-            placeholder="Example: 3x(2m@14km/h{Fast},1m@8km/h{Recovery}), 4x(45s@3:40/km{Rep},15s@8km/h{Easy})"
+            placeholder="Example: 3x(2m@14km/h 3%{Fast},1m@8km/h 1%{Recovery}), 4x(45s@3:40/km 5%{Rep},15s@8km/h 0%{Easy})"
           />
           <p className="text-xs text-muted-foreground">
-            Supported: 10m@10km/h, 45s@5m/s, 45s@3:40/km, 3x(2m@14,1m@8), optional names: 45s@16.3km/h{"{Step 43}"}
+            Supported: 10m@10km/h 1%, 45s@5m/s 3%, 45s@3:40/km 6%, 3x(2m@14,1m@8), optional names: 45s@16.3km/h 2%
+            {"{Step 43}"}
           </p>
         </div>
       )}
@@ -219,6 +233,8 @@ function formatSegmentLabel(segment: WorkoutSegment): string {
         ? `${mins}m`
         : `${remainingSeconds}s`;
 
-  const base = `${durationText} @ ${segment.speedKmh.toFixed(1)} km/h`;
+  const inclineText =
+    Math.abs(segment.inclinePercent) > 1e-9 ? ` ${segment.inclinePercent.toFixed(1)}%` : "";
+  const base = `${durationText} @ ${segment.speedKmh.toFixed(1)} km/h${inclineText}`;
   return segment.name ? `${segment.name}: ${base}` : base;
 }
